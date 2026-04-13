@@ -1,8 +1,7 @@
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+import os
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
@@ -15,155 +14,148 @@ from sklearn.metrics import (recall_score, precision_score, f1_score, roc_auc_sc
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 
-print("Loading data...")
-import os
+print("="*60)
+print("CUSTOMER CHURN PREDICTION (IMPROVED VERSION)")
+print("="*60)
+
 file_path = os.path.join('ML_Project', 'customer_account_and_usage.csv')
+if not os.path.exists(file_path):
+    file_path = 'customer_account_and_usage.csv'
 df = pd.read_csv(file_path)
-print(f"Shape: {df.shape}")
-print(f"Churn rate: {df['Churn'].mean():.4f}\n")
+print(f"Shape: {df.shape}, Churn rate: {df['Churn'].mean():.4f}")
 
+if 'Customer ID' in df.columns:
+    df.drop('Customer ID', axis=1, inplace=True)
 
-print("Engineering features from monthly data...")
-
+digital_cols = ['App Logins', 'Portal Logins', 'Email Clicks']
+for col in digital_cols:
+    if col in df.columns:
+        df[col].fillna(df[col].median(), inplace=True)
 
 elec_cols = [f'Electricity_Month_{i}' for i in range(1,13)]
 gas_cols = [f'Gas_Month_{i}' for i in range(1,13)]
 bill_cols = [f'Bill_Month_{i}' for i in range(1,13)]
 
-def add_aggregates(df, cols, prefix):
-    df[f'{prefix}_avg'] = df[cols].mean(axis=1)
-    df[f'{prefix}_std'] = df[cols].std(axis=1)
-    df[f'{prefix}_trend'] = df[cols].diff(axis=1).mean(axis=1) 
-    return df
-
 for cols, prefix in zip([elec_cols, gas_cols, bill_cols], ['elec', 'gas', 'bill']):
-    df = add_aggregates(df, cols, prefix)
+    df[f'{prefix}_trend'] = df[cols].diff(axis=1).mean(axis=1)
+    df[f'{prefix}_month12'] = df[cols[-1]]
 
-drop_cols = elec_cols + gas_cols + bill_cols
-df.drop(columns=drop_cols, inplace=True)
+df.drop(columns=elec_cols + gas_cols + bill_cols, inplace=True)
 
+redundant = ['Electricity 3M Avg', 'Gas 3M Avg', 'Total 3M Avg', 'Usage Change %', 
+             'Average Monthly Usage', 'High Usage Flag']
+df.drop(columns=[c for c in redundant if c in df.columns], inplace=True)
 
-if 'Customer ID' in df.columns:
-    df.drop('Customer ID', axis=1, inplace=True)
-
-print(f"New shape after feature engineering: {df.shape}")
-
+print(f"Features after engineering: {df.shape[1] - 1} predictors")
 
 X = df.drop('Churn', axis=1)
 y = df['Churn']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-
-categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
+categorical_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
 numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
 
-numeric_transformer = Pipeline(steps=[
+numeric_transformer = Pipeline([
     ('imputer', SimpleImputer(strategy='median')),
     ('scaler', StandardScaler())
 ])
 
-categorical_transformer = Pipeline(steps=[
+categorical_transformer = Pipeline([
     ('imputer', SimpleImputer(strategy='most_frequent')),
     ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
 ])
 
-preprocessor = ColumnTransformer(
-    transformers=[
-        ('num', numeric_transformer, numeric_cols),
-        ('cat', categorical_transformer, categorical_cols)
-    ])
-
-
-model_pipeline = ImbPipeline(steps=[
-    ('preprocessor', preprocessor),
-    ('smote', SMOTE(random_state=42)),
-    ('classifier', RandomForestClassifier(random_state=42))
+preprocessor = ColumnTransformer([
+    ('num', numeric_transformer, numeric_cols),
+    ('cat', categorical_transformer, categorical_cols)
 ])
 
+print("\n" + "="*60)
+print("BASELINE: LOGISTIC REGRESSION (with scaling)")
+print("="*60)
+lr_pipeline = Pipeline([
+    ('preprocessor', preprocessor),
+    ('clf', LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced'))
+])
+lr_pipeline.fit(X_train, y_train)
+y_pred_lr = lr_pipeline.predict(X_test)
+y_proba_lr = lr_pipeline.predict_proba(X_test)[:, 1]
 
-print("Tuning Random Forest (this may take 2-3 minutes)...")
+print(f"Recall: {recall_score(y_test, y_pred_lr):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred_lr):.4f}")
+print(f"F1: {f1_score(y_test, y_pred_lr):.4f}")
+print(f"ROC-AUC: {roc_auc_score(y_test, y_proba_lr):.4f}")
+print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred_lr))
+
+print("\n" + "="*60)
+print("RANDOM FOREST + SMOTE (tuned)")
+print("="*60)
+rf_pipeline = ImbPipeline([
+    ('preprocessor', preprocessor),
+    ('smote', SMOTE(random_state=42)),
+    ('clf', RandomForestClassifier(random_state=42, n_jobs=-1))
+])
+
 param_grid = {
-    'classifier__n_estimators': [100, 200],
-    'classifier__max_depth': [10, 20, None],
-    'classifier__min_samples_split': [2, 5],
-    'classifier__class_weight': ['balanced', None]
+    'clf__n_estimators': [100, 200],
+    'clf__max_depth': [10, 15],
+    'clf__min_samples_split': [5, 10],
+    'clf__class_weight': ['balanced']
 }
 
-grid = GridSearchCV(
-    model_pipeline, param_grid, cv=5, scoring='recall', n_jobs=-1, verbose=1
-)
+grid = GridSearchCV(rf_pipeline, param_grid, cv=5, scoring='recall', n_jobs=-1, verbose=1)
 grid.fit(X_train, y_train)
 
-print(f"\nBest parameters: {grid.best_params_}")
-print(f"Best cross-validation recall: {grid.best_score_:.4f}")
+print(f"Best params: {grid.best_params_}")
+print(f"Best CV recall: {grid.best_score_:.4f}")
 
-best_model = grid.best_estimator_
-y_pred = best_model.predict(X_test)
-y_proba = best_model.predict_proba(X_test)[:, 1]
+best_rf = grid.best_estimator_
+y_pred_rf = best_rf.predict(X_test)
+y_proba_rf = best_rf.predict_proba(X_test)[:, 1]
 
-print("\n=== Test Set Performance ===")
-print(f"Recall    : {recall_score(y_test, y_pred):.4f}")
-print(f"Precision : {precision_score(y_test, y_pred):.4f}")
-print(f"F1 Score  : {f1_score(y_test, y_pred):.4f}")
-print(f"ROC-AUC   : {roc_auc_score(y_test, y_proba):.4f}")
-print("\nConfusion Matrix:")
-cm = confusion_matrix(y_test, y_pred)
-print(cm)
-print("\nClassification Report:")
-print(classification_report(y_test, y_pred))
+print(f"\nTest Recall: {recall_score(y_test, y_pred_rf):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred_rf):.4f}")
+print(f"F1: {f1_score(y_test, y_pred_rf):.4f}")
+print(f"ROC-AUC: {roc_auc_score(y_test, y_proba_rf):.4f}")
+print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred_rf))
 
+print("\n" + "="*60)
+print("MODEL COMPARISON")
+print("="*60)
+comparison = pd.DataFrame({
+    'Model': ['Logistic Regression (balanced)', 'Random Forest + SMOTE'],
+    'Recall': [recall_score(y_test, y_pred_lr), recall_score(y_test, y_pred_rf)],
+    'Precision': [precision_score(y_test, y_pred_lr), precision_score(y_test, y_pred_rf)],
+    'F1': [f1_score(y_test, y_pred_lr), f1_score(y_test, y_pred_rf)],
+    'ROC-AUC': [roc_auc_score(y_test, y_proba_lr), roc_auc_score(y_test, y_proba_rf)]
+})
+print(comparison.to_string(index=False))
 
-fn_mask = (y_test == 1) & (y_pred == 0)
-print(f"\nFalse Negatives (missed churners): {fn_mask.sum()}")
-if fn_mask.sum() > 0:
-    fn_data = X_test[fn_mask].copy()
-    fn_data.to_csv('false_negatives.csv', index=False)
-    print("Saved false negatives to 'false_negatives.csv'")
-
-preprocessor_fitted = best_model.named_steps['preprocessor']
+preprocessor_fitted = best_rf.named_steps['preprocessor']
 cat_features = preprocessor_fitted.named_transformers_['cat'].named_steps['onehot'].get_feature_names_out(categorical_cols)
 all_features = np.concatenate([numeric_cols, cat_features])
-
-rf_clf = best_model.named_steps['classifier']
-importances = rf_clf.feature_importances_
-
-
+importances = best_rf.named_steps['clf'].feature_importances_
 indices = np.argsort(importances)[-15:]
 plt.figure(figsize=(10, 8))
 plt.barh(range(len(indices)), importances[indices])
 plt.yticks(range(len(indices)), [all_features[i] for i in indices])
-plt.xlabel('Importance')
 plt.title('Top 15 Feature Importances')
 plt.tight_layout()
 plt.savefig('feature_importance.png')
 plt.show()
 
-
-print("\n=== Fairness Analysis ===")
-demo_cols = ['Region', 'Gender', 'Customer Type']
-for col in demo_cols:
+print("\n" + "="*60)
+print("FAIRNESS ANALYSIS (Recall by group)")
+print("="*60)
+for col in ['Region', 'Gender', 'Customer Type']:
     if col in X_test.columns:
-        groups = X_test[col].unique()
         print(f"\n{col}:")
-        for g in groups:
-            mask = (X_test[col] == g)
-            if mask.sum() > 0:
-                rec = recall_score(y_test[mask], y_pred[mask]) if y_test[mask].sum() > 0 else 0
-                print(f"  {g}: recall = {rec:.4f} (n={mask.sum()})")
+        for val in X_test[col].unique():
+            mask = X_test[col] == val
+            if mask.sum() > 0 and y_test[mask].sum() > 0:
+                rec = recall_score(y_test[mask], y_pred_rf[mask])
+                print(f"  {val}: recall={rec:.3f} (n={mask.sum()}, churn={y_test[mask].sum()})")
+            else:
+                print(f"  {val}: no churn cases")
 
-
-print("\n=== Business Recommendations ===")
-print(f"""
-1. The model achieves recall = {recall_score(y_test, y_pred):.2%}, meaning it catches
-   {recall_score(y_test, y_pred):.2%} of customers who would otherwise churn.
-2. Top churn drivers (see feature importance): late payments, usage drop, low digital engagement.
-3. Action: Proactively target high-risk customers with retention offers.
-4. Expected impact: Reducing churn by 10% would save approximately £X (calculate from business data).
-5. Deployment: Integrate into CRM, retrain monthly, monitor for data drift.
-6. Fairness: Recall varies by region/gender (see above) – further investigation needed to avoid bias.
-""")
-
-print("\n=== Script Complete ===")
+print("\nScript complete.")
