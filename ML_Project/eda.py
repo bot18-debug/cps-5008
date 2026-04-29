@@ -213,8 +213,10 @@ for col in numeric_features:
 
     fig, ax = plt.subplots(figsize=(7, 4))
     sns.boxplot(x='Churn', y=col, data=df, ax=ax,
-                palette={0: '#2196F3', 1: '#FF5722'},
-                width=0.4, flierprops=dict(marker='o', markersize=3, alpha=0.4))
+            hue='Churn',
+            palette={0: '#2196F3', 1: '#FF5722'},
+            width=0.4, legend=False,
+            flierprops=dict(marker='o', markersize=3, alpha=0.4))
     ax.set_xticklabels(['Retained (0)', 'Churned (1)'])
     ax.set_title(f"{col} by Churn", fontsize=12, fontweight='bold')
     ax.set_xlabel("")

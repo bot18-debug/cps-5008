@@ -1,0 +1,12 @@
+
+#  required packages for the ML project:
+
+                        |----required packages for the ML project:
+                         |pandas 
+                         |numpy 
+                         |matplotlib 
+                         |seaborn 
+                         |scikit-learn
+
+
+

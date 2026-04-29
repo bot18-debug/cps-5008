@@ -1,12 +1,13 @@
+# requirements.txt
+# CPS5008 - Customer Churn Prediction
+# Student ID: 2411066
+# Python 3.10+ required
+# Install with: pip install -r requirements.txt
 
-#  required packages for the ML project:
-
-                        |----required packages for the ML project:
-                         |pandas 
-                         |numpy 
-                         |matplotlib 
-                         |seaborn 
-                         |scikit-learn
-
-
-
+pandas
+numpy
+scikit-learn
+imbalanced-learn
+xgboost
+matplotlib
+seaborn
