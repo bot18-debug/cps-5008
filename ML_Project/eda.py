@@ -4,7 +4,8 @@ import seaborn as sns
 import numpy as np
 import os
 
-
+output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "graphs")
+os.makedirs(output_dir, exist_ok=True)
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(script_dir, "customer_account_and_usage.csv")
@@ -27,7 +28,7 @@ if len(missing) > 0:
     missing.plot(kind='bar')
     plt.title("Missing values per column")
     plt.tight_layout()
-    plt.savefig("missing_values.png")
+    plt.savefig(os.path.join(output_dir, "missing_values.png"))
     plt.show()
 else:
     print("\nNo missing values found.")
@@ -35,13 +36,13 @@ else:
 plt.figure(figsize=(6,4))
 sns.countplot(x='Churn', data=df)
 plt.title(f"Churn Distribution (Churn rate: {df['Churn'].mean():.2%})")
-plt.savefig("churn_distribution.png")
+plt.savefig(os.path.join(output_dir, "churn_distribution.png"))
 plt.show()
 
 plt.figure(figsize=(10,5))
 sns.histplot(data=df, x='Age', hue='Churn', bins=20, alpha=0.6)
 plt.title("Age Distribution by Churn")
-plt.savefig("age_churn.png")
+plt.savefig(os.path.join(output_dir, "age_churn.png"))
 plt.show()
 
 numeric_df = df.select_dtypes(include=['number'])
@@ -49,7 +50,7 @@ plt.figure(figsize=(14,12))
 corr = numeric_df.corr()
 sns.heatmap(corr, cmap="coolwarm", annot=False, linewidths=0.5)
 plt.title("Correlation Heatmap (Numeric Features)")
-plt.savefig("correlation_heatmap.png")
+plt.savefig(os.path.join(output_dir, "correlation_heatmap.png"))
 plt.show()
 
 churn_corr = corr['Churn'].drop('Churn').abs().sort_values(ascending=False).head(10)
@@ -66,7 +67,7 @@ for col in categorical_cols:
         plt.title(f"Churn Rate by {col}")
         plt.ylabel("Churn Rate")
         plt.tight_layout()
-        plt.savefig(f"churn_by_{col}.png")
+        plt.savefig(os.path.join(output_dir, f"churn_by_{col}.png"))
         plt.show()
 
 num_features = ['Age', 'Late Payments', 'Average Payment Delay (days)', 
@@ -76,6 +77,6 @@ for col in num_features:
         plt.figure(figsize=(8,4))
         sns.boxplot(x='Churn', y=col, data=df)
         plt.title(f"{col} by Churn")
-        plt.savefig(f"boxplot_{col}.png")
+        plt.savefig(os.path.join(output_dir, f"boxplot_{col}.png"))
         plt.show()
 
