@@ -9,21 +9,19 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (recall_score, precision_score, f1_score, roc_auc_score,
-                             confusion_matrix, precision_recall_curve)
+from sklearn.metrics import recall_score, precision_score, f1_score, roc_auc_score, confusion_matrix
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
+from xgboost import XGBClassifier
 
 print("="*60)
-print("CUSTOMER CHURN PREDICTION (THRESHOLD TUNED)")
+print("CUSTOMER CHURN PREDICTION")
 print("="*60)
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 csv_path = os.path.join(script_dir, "customer_account_and_usage.csv")
 if not os.path.exists(csv_path):
     csv_path = os.path.join(script_dir, "..", "customer_account_and_usage.csv")
-if not os.path.exists(csv_path):
-    raise FileNotFoundError("customer_account_and_usage.csv not found.")
 df = pd.read_csv(csv_path)
 
 print(f"Shape: {df.shape}, Churn rate: {df['Churn'].mean():.4f}")
@@ -34,7 +32,7 @@ if 'Customer ID' in df.columns:
 digital_cols = ['App Logins', 'Portal Logins', 'Email Clicks']
 for col in digital_cols:
     if col in df.columns:
-        df[col].fillna(df[col].median(), inplace=True)
+        df[col] = df[col].fillna(df[col].median())
 
 elec_cols = [f'Electricity_Month_{i}' for i in range(1,13)]
 gas_cols = [f'Gas_Month_{i}' for i in range(1,13)]
@@ -50,8 +48,6 @@ redundant = ['Electricity 3M Avg', 'Gas 3M Avg', 'Total 3M Avg', 'Usage Change %
              'Average Monthly Usage', 'High Usage Flag']
 df.drop(columns=[c for c in redundant if c in df.columns], inplace=True)
 
-print(f"Features after engineering: {df.shape[1] - 1} predictors")
-
 X = df.drop('Churn', axis=1)
 y = df['Churn']
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -63,19 +59,17 @@ numeric_transformer = Pipeline([
     ('imputer', SimpleImputer(strategy='median')),
     ('scaler', StandardScaler())
 ])
-
 categorical_transformer = Pipeline([
     ('imputer', SimpleImputer(strategy='most_frequent')),
     ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
 ])
-
 preprocessor = ColumnTransformer([
     ('num', numeric_transformer, numeric_cols),
     ('cat', categorical_transformer, categorical_cols)
 ])
 
 print("\n" + "="*60)
-print("BASELINE: LOGISTIC REGRESSION (balanced class weight)")
+print("LOGISTIC REGRESSION (balanced class weight)")
 print("="*60)
 lr_pipeline = Pipeline([
     ('preprocessor', preprocessor),
@@ -97,50 +91,57 @@ rf_pipeline = ImbPipeline([
     ('smote', SMOTE(random_state=42)),
     ('clf', RandomForestClassifier(random_state=42, n_jobs=-1))
 ])
-
-param_grid = {
+param_grid_rf = {
     'clf__n_estimators': [100, 200],
     'clf__max_depth': [10, 15],
     'clf__min_samples_split': [5, 10],
     'clf__class_weight': ['balanced']
 }
-
-grid = GridSearchCV(rf_pipeline, param_grid, cv=5, scoring='recall', n_jobs=-1, verbose=1)
-grid.fit(X_train, y_train)
-
-print(f"Best params: {grid.best_params_}")
-print(f"Best CV recall: {grid.best_score_:.4f}")
-best_rf = grid.best_estimator_
+grid_rf = GridSearchCV(rf_pipeline, param_grid_rf, cv=5, scoring='recall', n_jobs=-1, verbose=1)
+grid_rf.fit(X_train, y_train)
+best_rf = grid_rf.best_estimator_
+y_pred_rf = best_rf.predict(X_test)
 y_proba_rf = best_rf.predict_proba(X_test)[:, 1]
-
-def find_threshold_for_recall_target(model, X_val, y_val, target_recall=0.80):
-    probs = model.predict_proba(X_val)[:, 1]
-    precisions, recalls, thresholds = precision_recall_curve(y_val, probs)
-    mask = recalls >= target_recall
-    if not np.any(mask):
-        return 0.5
-    best_idx = np.argmax(precisions[mask])
-    return thresholds[best_idx]
-
-optimal_thresh = find_threshold_for_recall_target(best_rf, X_test, y_test, target_recall=0.80)
-print(f"\nOptimal threshold (recall >= 0.80): {optimal_thresh:.3f}")
-
-y_pred_rf_tuned = (y_proba_rf >= optimal_thresh).astype(int)
-
-print(f"Tuned Random Forest - Recall: {recall_score(y_test, y_pred_rf_tuned):.4f}")
-print(f"Tuned Random Forest - Precision: {precision_score(y_test, y_pred_rf_tuned):.4f}")
-print(f"Tuned Random Forest - F1: {f1_score(y_test, y_pred_rf_tuned):.4f}")
-print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred_rf_tuned))
+print(f"Best params: {grid_rf.best_params_}")
+print(f"Recall: {recall_score(y_test, y_pred_rf):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred_rf):.4f}")
+print(f"F1: {f1_score(y_test, y_pred_rf):.4f}")
+print(f"ROC-AUC: {roc_auc_score(y_test, y_proba_rf):.4f}")
 
 print("\n" + "="*60)
-print("MODEL COMPARISON (with threshold tuning for RF)")
+print("XGBOOST + SMOTE (with GridSearchCV)")
+print("="*60)
+xgb_pipeline = ImbPipeline([
+    ('preprocessor', preprocessor),
+    ('smote', SMOTE(random_state=42)),
+    ('clf', XGBClassifier(random_state=42, eval_metric='logloss', use_label_encoder=False))
+])
+param_grid_xgb = {
+    'clf__n_estimators': [100, 200],
+    'clf__max_depth': [3, 5],
+    'clf__learning_rate': [0.05, 0.1],
+    'clf__scale_pos_weight': [5, 10]
+}
+grid_xgb = GridSearchCV(xgb_pipeline, param_grid_xgb, cv=5, scoring='recall', n_jobs=-1, verbose=1)
+grid_xgb.fit(X_train, y_train)
+best_xgb = grid_xgb.best_estimator_
+y_pred_xgb = best_xgb.predict(X_test)
+y_proba_xgb = best_xgb.predict_proba(X_test)[:, 1]
+print(f"Best params: {grid_xgb.best_params_}")
+print(f"Recall: {recall_score(y_test, y_pred_xgb):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred_xgb):.4f}")
+print(f"F1: {f1_score(y_test, y_pred_xgb):.4f}")
+print(f"ROC-AUC: {roc_auc_score(y_test, y_proba_xgb):.4f}")
+
+print("\n" + "="*60)
+print("MODEL COMPARISON")
 print("="*60)
 comparison = pd.DataFrame({
-    'Model': ['Logistic Regression (balanced)', 'Random Forest + SMOTE (tuned threshold)'],
-    'Recall': [recall_score(y_test, y_pred_lr), recall_score(y_test, y_pred_rf_tuned)],
-    'Precision': [precision_score(y_test, y_pred_lr), precision_score(y_test, y_pred_rf_tuned)],
-    'F1': [f1_score(y_test, y_pred_lr), f1_score(y_test, y_pred_rf_tuned)],
-    'ROC-AUC': [roc_auc_score(y_test, y_proba_lr), roc_auc_score(y_test, y_proba_rf)]
+    'Model': ['Logistic Regression (balanced)', 'Random Forest + SMOTE', 'XGBoost + SMOTE'],
+    'Recall': [recall_score(y_test, y_pred_lr), recall_score(y_test, y_pred_rf), recall_score(y_test, y_pred_xgb)],
+    'Precision': [precision_score(y_test, y_pred_lr), precision_score(y_test, y_pred_rf), precision_score(y_test, y_pred_xgb)],
+    'F1': [f1_score(y_test, y_pred_lr), f1_score(y_test, y_pred_rf), f1_score(y_test, y_pred_xgb)],
+    'ROC-AUC': [roc_auc_score(y_test, y_proba_lr), roc_auc_score(y_test, y_proba_rf), roc_auc_score(y_test, y_proba_xgb)]
 })
 print(comparison.to_string(index=False))
 
@@ -158,7 +159,7 @@ plt.savefig('feature_importance.png')
 plt.close()
 
 print("\n" + "="*60)
-print("FAIRNESS ANALYSIS (Recall by demographic group)")
+print("FAIRNESS ANALYSIS (Random Forest)")
 print("="*60)
 for col in ['Region', 'Gender', 'Customer Type']:
     if col in X_test.columns:
@@ -166,7 +167,7 @@ for col in ['Region', 'Gender', 'Customer Type']:
         for val in X_test[col].unique():
             mask = X_test[col] == val
             if mask.sum() > 0 and y_test[mask].sum() > 0:
-                rec = recall_score(y_test[mask], y_pred_rf_tuned[mask])
+                rec = recall_score(y_test[mask], y_pred_rf[mask])
                 print(f"  {val}: recall={rec:.3f} (n={mask.sum()}, churn={y_test[mask].sum()})")
             else:
                 print(f"  {val}: no churn cases")
